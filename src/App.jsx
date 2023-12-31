@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useReducer, useState } from "react";
 import { ToastContainer, toast } from "react-toastify";
 
 import UserContext from "./contexts/UserContext";
@@ -7,132 +7,132 @@ import Navbar from "./components/Navbar/Navbar";
 import Routing from "./components/Routing/Routing";
 import { getJwt, getUser } from "./services/userServices";
 import setAuthToken from "./utils/setAuthToken";
-import {
-    addToCartAPI,
-    decreaseProductAPI,
-    getCartAPI,
-    increaseProductAPI,
-    removeFromCartAPI,
-} from "./services/cartServices";
 import "react-toastify/dist/ReactToastify.css";
 import CartContext from "./contexts/CartContext";
+import cartReducer from "./reducers/cartReducer";
+import useData from "./hooks/useData";
+import useAddToCart from "./hooks/cart/useAddToCart";
+import useRemoveFromCart from "./hooks/cart/useRemoveFromCart";
+import useUpdateCart from "./hooks/cart/useUpdateCart";
 
 setAuthToken(getJwt());
 
 const App = () => {
-    const [user, setUser] = useState(null);
-    const [cart, setCart] = useState([]);
+  const [user, setUser] = useState(null);
+  const [cart, dispatchCart] = useReducer(cartReducer, []);
+  const { data: cartData, refetch } = useData("/cart", null, ["cart"]);
 
-    useEffect(() => {
-        try {
-            const jwtUser = getUser();
-            if (Date.now() >= jwtUser.exp * 1000) {
-                localStorage.removeItem("token");
-                location.reload();
-            } else {
-                setUser(jwtUser);
-            }
-        } catch (error) {}
-    }, []);
+  const addToCartMutation = useAddToCart();
+  const removeFromCartMutation = useRemoveFromCart();
+  const updateCartMutation = useUpdateCart();
 
-    const addToCart = (product, quantity) => {
-        const updatedCart = [...cart];
-        const productIndex = updatedCart.findIndex(
-            (item) => item.product._id === product._id
-        );
+  useEffect(() => {
+    if (cartData) {
+      dispatchCart({ type: "GET_CART", payload: { products: cartData } });
+    }
+  }, [cartData]);
 
-        if (productIndex === -1) {
-            updatedCart.push({ product: product, quantity: quantity });
-        } else {
-            updatedCart[productIndex].quantity += quantity;
-        }
+  useEffect(() => {
+    if (user) {
+      refetch();
+    }
+  }, [user]);
 
-        setCart(updatedCart);
+  useEffect(() => {
+    try {
+      const jwtUser = getUser();
+      if (Date.now() >= jwtUser.exp * 1000) {
+        localStorage.removeItem("token");
+        location.reload();
+      } else {
+        setUser(jwtUser);
+      }
+    } catch (error) {}
+  }, []);
 
-        addToCartAPI(product._id, quantity)
-            .then((res) => {
-                toast.success("Product Added Succesfully!");
-            })
-            .catch((err) => {
-                toast.error("Failed to add product!");
-                setCart(cart);
-            });
-    };
+  const addToCart = useCallback(
+    (product, quantity) => {
+      dispatchCart({ type: "ADD_TO_CART", payload: { product, quantity } });
 
-    const removeFromCart = (id) => {
-        const oldCart = [...cart];
-        const newCart = oldCart.filter((item) => item.product._id !== id);
-        setCart(newCart);
-
-        removeFromCartAPI(id).catch((err) => {
+      addToCartMutation.mutate(
+        { id: product._id, quantity: quantity },
+        {
+          onError: (error) => {
             toast.error("Something went wrong!");
-            setCart(oldCart);
-        });
-    };
-
-    const updateCart = (type, id) => {
-        const oldCart = [...cart];
-        const updatedCart = [...cart];
-        const productIndex = updatedCart.findIndex(
-            (item) => item.product._id === id
-        );
-
-        if (type === "increase") {
-            updatedCart[productIndex].quantity += 1;
-            setCart(updatedCart);
-
-            increaseProductAPI(id).catch((err) => {
-                toast.error("Something went wrong!");
-                setCart(oldCart);
-            });
+            dispatchCart({ type: "REVERT_CART", payload: { cart } });
+          },
         }
-        if (type === "decrease") {
-            updatedCart[productIndex].quantity -= 1;
-            setCart(updatedCart);
+      );
+    },
+    [cart]
+  );
 
-            decreaseProductAPI(id).catch((err) => {
-                toast.error("Something went wrong!");
-                setCart(oldCart);
-            });
+  const removeFromCart = useCallback(
+    (id) => {
+      dispatchCart({ type: "REMOVE_FROM_CART", payload: { id } });
+
+      removeFromCartMutation.mutate(
+        { id },
+        {
+          onError: () => {
+            toast.error("Something went wrong!");
+            dispatchCart({ type: "REVERT_CART", payload: { cart } });
+          },
         }
-    };
+      );
+    },
+    [cart]
+  );
 
-    const getCart = () => {
-        getCartAPI()
-            .then((res) => {
-                setCart(res.data);
-            })
-            .catch((err) => {
-                toast.error("Something went wrong!");
-            });
-    };
+  const updateCart = useCallback(
+    (type, id) => {
+      const updatedCart = [...cart];
+      const productIndex = updatedCart.findIndex(
+        (item) => item.product._id === id
+      );
 
-    useEffect(() => {
-        if (user) {
-            getCart();
+      if (type === "increase") {
+        updatedCart[productIndex].quantity += 1;
+      }
+      if (type === "decrease") {
+        updatedCart[productIndex].quantity -= 1;
+      }
+
+      dispatchCart({ type: "GET_CART", payload: { products: updatedCart } });
+
+      updateCartMutation.mutate(
+        { id, type },
+        {
+          onError: () => {
+            toast.error("Something went wrong!");
+            dispatchCart({ type: "REVERT_CART", payload: { cart } });
+          },
         }
-    }, [user]);
+      );
+    },
+    [cart]
+  );
 
-    return (
-        <UserContext.Provider value={user}>
-            <CartContext.Provider
-                value={{
-                    cart,
-                    addToCart,
-                    removeFromCart,
-                    updateCart,
-                    setCart,
-                }}>
-                <div className='app'>
-                    <Navbar />
-                    <main>
-                        <ToastContainer position='bottom-right' />
-                        <Routing />
-                    </main>
-                </div>
-            </CartContext.Provider>
-        </UserContext.Provider>
-    );
+  return (
+    <UserContext.Provider value={user}>
+      <CartContext.Provider
+        value={{
+          cart,
+          addToCart,
+          removeFromCart,
+          updateCart,
+        }}
+      >
+        <div className="app">
+          <Navbar />
+          <main>
+            <ToastContainer position="bottom-right" />
+            <Routing />
+          </main>
+        </div>
+      </CartContext.Provider>
+    </UserContext.Provider>
+  );
 };
 
 export default App;
